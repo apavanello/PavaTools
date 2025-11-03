@@ -1,0 +1,15 @@
+services:
+  streamlit_app:
+    # Constrói a imagem a partir do Dockerfile no diretório atual (.)
+    build: .
+    # Nome do container para fácil identificação
+    container_name: PavaTools
+    # Mapeamento de portas: <porta_no_seu_pc>:<porta_no_container>
+    ports:
+      - "8501:8501"
+    # Mapeamento de volumes: <pasta_local>:<pasta_no_container>
+    # Esta é a parte crucial: a pasta 'app' local é espelhada dentro do
+    # container. Qualquer mudança na pasta 'app' no seu PC será
+    # refletida instantaneamente dentro do container.
+    volumes:
+      - ./src/pages:/app/pages
