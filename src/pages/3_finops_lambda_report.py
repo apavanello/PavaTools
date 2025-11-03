@@ -1,9 +1,11 @@
 import streamlit as st
+from aws_utils import handle_sso_login
 import boto3
 import pandas as pd
 from datetime import datetime, timedelta, date
 import io
 from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, SSOTokenLoadError
 
 # --- CONFIGURAÇÃO DA PÁGINA STREAMLIT ---
 st.set_page_config(
@@ -93,10 +95,30 @@ if run_analysis:
     try:
         st.info(f"Iniciando sessão com o perfil AWS: '{selected_profile}'...")
         session = boto3.Session(profile_name=selected_profile)
+
+        sts_client = session.client('sts')
+        sts_client.get_caller_identity()
+        
+        st.success("Sessão AWS iniciada e validada com sucesso.")
+
         # Inicializa os clientes necessários a partir da sessão
+        sts_client = session.client('sts')
         cloudwatch = session.client('cloudwatch')
         cost_explorer = session.client('ce')
         st.success("Sessão AWS iniciada com sucesso.")
+
+    # --- BLOCO DE CAPTURA DO TOKEN EXPIRADO ---
+    except SSOTokenLoadError:
+        # Chama nossa nova função
+        success = handle_sso_login(selected_profile)
+        if success:
+            # Instrui o usuário a rodar novamente, pois o estado mudou
+            st.info("Token renovado! Por favor, clique em 'Iniciar Análise' novamente para continuar.")
+        st.stop() # Interrompe a execução atual
+        
+    except ClientError as e:
+        st.error(f"Erro de permissão ou configuração com o perfil '{selected_profile}'. Detalhe: {e.response['Error']['Message']}")
+        st.stop()
     except Exception as e:
         st.error(f"Falha ao iniciar a sessão Boto3 com o perfil '{selected_profile}'. Erro: {e}")
         st.stop()

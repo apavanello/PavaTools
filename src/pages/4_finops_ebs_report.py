@@ -1,8 +1,9 @@
 import streamlit as st
 import boto3
+from aws_utils import handle_sso_login
 import pandas as pd
 import io
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, SSOTokenLoadError
 
 # --- CONFIGURAÇÃO DA PÁGINA STREAMLIT ---
 st.set_page_config(
@@ -139,6 +140,11 @@ if run_analysis:
     else:
         try:
             session = boto3.Session(profile_name=selected_profile)
+            sts_client = session.client('sts')
+            sts_client.get_caller_identity()
+        
+            st.success("Sessão AWS iniciada e validada com sucesso.")
+            
             df_orphaned = analyze_orphaned_volumes(session, selected_regions)
             
             st.header("📊 Resultados da Análise")
@@ -171,10 +177,21 @@ if run_analysis:
                     mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
                 )
 
+        # --- BLOCO DE CAPTURA DO TOKEN EXPIRADO ---
+        except SSOTokenLoadError:
+            # Chama nossa nova função
+            success = handle_sso_login(selected_profile)
+            if success:
+                # Instrui o usuário a rodar novamente, pois o estado mudou
+                st.info("Token renovado! Por favor, clique em 'Iniciar Análise' novamente para continuar.")
+            st.stop() # Interrompe a execução atual
+            
         except ClientError as e:
-            st.error(f"Erro de credenciais ou permissão com o perfil '{selected_profile}'. Verifique se o perfil é válido e tem as permissões necessárias. Detalhe: {e.response['Error']['Message']}")
+            st.error(f"Erro de permissão ou configuração com o perfil '{selected_profile}'. Detalhe: {e.response['Error']['Message']}")
+            st.stop()
         except Exception as e:
-            st.error(f"Ocorreu um erro inesperado: {e}")
+            st.error(f"Falha ao iniciar a sessão Boto3 com o perfil '{selected_profile}'. Erro: {e}")
+            st.stop()
 
 else:
     st.info("Selecione um perfil e as regiões na barra lateral e clique em 'Buscar Volumes Órfãos' para iniciar a análise.")
