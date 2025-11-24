@@ -1,0 +1,2 @@
+include src/pavatools/bookmarks.json
+recursive-include src/pavatools/pages *.py
