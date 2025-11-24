@@ -1,6 +1,6 @@
 [project]
 name = "pavatools"
-version = "0.1.0"
+version = "1.0.4"
 description = "A collection of AWS FinOps and utility tools"
 readme = "README.md"
 requires-python = ">=3.13"
