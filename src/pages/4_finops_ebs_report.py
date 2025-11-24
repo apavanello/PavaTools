@@ -4,6 +4,7 @@ from aws_utils import handle_sso_login
 import pandas as pd
 import io
 from botocore.exceptions import ClientError, SSOTokenLoadError
+from navigation import create_hierarchical_sidebar, set_page_context
 
 # --- CONFIGURAÇÃO DA PÁGINA STREAMLIT ---
 st.set_page_config(
@@ -11,6 +12,12 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Definir contexto da página atual
+set_page_context("4_finops_ebs_report.py")
+
+# Criar navegação hierárquica na sidebar
+create_hierarchical_sidebar()
 
 # --- DADOS E FUNÇÕES AUXILIARES ---
 

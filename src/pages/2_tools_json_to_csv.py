@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import json
+from navigation import create_hierarchical_sidebar, set_page_context
 
 # --- Configuração da Página ---
 st.set_page_config(
@@ -9,6 +10,12 @@ st.set_page_config(
     layout="centered",
     initial_sidebar_state="auto"
 )
+
+# Definir contexto da página atual
+set_page_context("2_tools_json_to_csv.py")
+
+# Criar navegação hierárquica na sidebar
+create_hierarchical_sidebar()
 
 # --- Funções Auxiliares ---
 

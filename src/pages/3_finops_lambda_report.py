@@ -6,12 +6,19 @@ from datetime import datetime, timedelta, date
 import io
 from botocore.exceptions import ClientError
 from botocore.exceptions import ClientError, SSOTokenLoadError
+from navigation import create_hierarchical_sidebar, set_page_context
 
 # --- CONFIGURAÇÃO DA PÁGINA STREAMLIT ---
 st.set_page_config(
     page_title="Analisador de Lambdas AWS",
     layout="wide"
 )
+
+# Definir contexto da página atual
+set_page_context("3_finops_lambda_report.py")
+
+# Criar navegação hierárquica na sidebar
+create_hierarchical_sidebar()
 
 # --- FUNÇÕES AUXILIARES ---
 

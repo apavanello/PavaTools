@@ -5,16 +5,17 @@ import io
 from botocore.exceptions import ClientError, SSOTokenLoadError
 import subprocess
 import shutil
+from datetime import datetime, timezone
 from navigation import create_hierarchical_sidebar, set_page_context
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(
-    page_title="Enriquecedor de Tags Lambda",
+    page_title="Relatório de Uso de Lambdas",
     layout="wide"
 )
 
 # Definir contexto da página atual
-set_page_context("5_lambda_tags_retrival.py")
+set_page_context("7_lambda_usage_report.py")
 
 # Criar navegação hierárquica na sidebar
 create_hierarchical_sidebar()
@@ -64,45 +65,76 @@ def handle_sso_login(profile_name):
 
 # --- FUNÇÃO PRINCIPAL DE LÓGICA ---
 
-def get_lambda_tags(lambda_client, function_name):
+def get_lambda_last_execution(logs_client, function_name):
     """
-    Busca as tags de uma função Lambda específica.
+    Busca a data da última execução de uma função Lambda através do CloudWatch Logs.
 
     Retorna:
-        str: Uma string formatada com as tags ou uma mensagem de status.
+        dict: Dicionário com 'Last_Execution_Date' e 'Days_Without_Use'.
     """
+    log_group_name = f"/aws/lambda/{function_name}"
+    
     try:
-        # Precisamos do ARN para listar as tags
-        response_config = lambda_client.get_function_configuration(FunctionName=function_name)
-        function_arn = response_config['FunctionArn']
+        # Busca o último stream de log ordenado por tempo
+        response = logs_client.describe_log_streams(
+            logGroupName=log_group_name,
+            orderBy='LastEventTime',
+            descending=True,
+            limit=1
+        )
         
-        # Agora buscamos as tags usando o ARN
-        response_tags = lambda_client.list_tags(Resource=function_arn)
+        streams = response.get('logStreams', [])
         
-        tags = response_tags.get('Tags', {})
-        if not tags:
-            return "Sem Tags"
+        if not streams:
+            return {
+                "Last_Execution_Date": "Sem Logs (Nunca executou ou logs desativados)",
+                "Days_Without_Use": "N/A"
+            }
+            
+        last_event_timestamp = streams[0].get('lastEventTimestamp')
         
-        # Formata o dicionário de tags em uma string legível
-        return "; ".join([f"{key}={value}" for key, value in tags.items()])
+        if not last_event_timestamp:
+             return {
+                "Last_Execution_Date": "Stream vazio",
+                "Days_Without_Use": "N/A"
+            }
+
+        # Converte timestamp (ms) para datetime
+        last_execution_dt = datetime.fromtimestamp(last_event_timestamp / 1000.0, tz=timezone.utc)
+        now = datetime.now(timezone.utc)
+        
+        days_without_use = (now - last_execution_dt).days
+        
+        return {
+            "Last_Execution_Date": last_execution_dt.strftime('%Y-%m-%d %H:%M:%S UTC'),
+            "Days_Without_Use": days_without_use
+        }
 
     except ClientError as e:
         if e.response['Error']['Code'] == 'ResourceNotFoundException':
-            return "Lambda Não Encontrada"
+            return {
+                "Last_Execution_Date": "Log Group não encontrado",
+                "Days_Without_Use": "N/A"
+            }
         else:
-            # Retorna a mensagem de erro da API para depuração
-            return f"Erro de Permissão: {e.response['Error']['Code']}"
+            return {
+                "Last_Execution_Date": f"Erro: {e.response['Error']['Code']}",
+                "Days_Without_Use": "Erro"
+            }
     except Exception as e:
-        return f"Erro Inesperado: {str(e)}"
+        return {
+            "Last_Execution_Date": f"Erro Inesperado: {str(e)}",
+            "Days_Without_Use": "Erro"
+        }
 
 # --- INTERFACE DO USUÁRIO ---
 
-st.title("🏷️ Enriquecedor de CSV com Tags de Lambdas")
-st.markdown("Faça o upload de um arquivo CSV contendo nomes de funções Lambda para adicionar uma coluna com suas respectivas tags da AWS.")
+st.title("🕒 Relatório de Uso de Lambdas (Last Execution)")
+st.markdown("Faça o upload de um arquivo CSV contendo nomes de funções Lambda para calcular o tempo desde a última execução.")
 
 # Limpar resultados anteriores se um novo arquivo for carregado
-if 'last_uploaded_file' not in st.session_state:
-    st.session_state.last_uploaded_file = None
+if 'last_uploaded_file_usage' not in st.session_state:
+    st.session_state.last_uploaded_file_usage = None
 
 # --- BARRA LATERAL DE CONFIGURAÇÃO ---
 
@@ -118,10 +150,10 @@ else:
 uploaded_file = st.file_uploader("2. Faça o upload do arquivo CSV", type=["csv"])
 
 # Se o arquivo mudou, reseta os resultados
-if uploaded_file and uploaded_file.name != st.session_state.last_uploaded_file:
-    st.session_state.last_uploaded_file = uploaded_file.name
-    if 'processed_df' in st.session_state:
-        del st.session_state.processed_df
+if uploaded_file and uploaded_file.name != st.session_state.last_uploaded_file_usage:
+    st.session_state.last_uploaded_file_usage = uploaded_file.name
+    if 'processed_usage_df' in st.session_state:
+        del st.session_state.processed_usage_df
 
 selected_column = None
 if uploaded_file:
@@ -132,16 +164,16 @@ if uploaded_file:
     except Exception as e:
         st.error(f"Não foi possível ler o arquivo CSV: {e}")
 
-run_enrichment = st.button("🚀 Iniciar Processamento", disabled=(not all([selected_profile, uploaded_file, selected_column])))
+run_report = st.button("🚀 Gerar Relatório", disabled=(not all([selected_profile, uploaded_file, selected_column])))
 
 # --- ÁREA PRINCIPAL E LÓGICA DE PROCESSAMENTO ---
-if run_enrichment:
+if run_report:
     try:
         # Validação do token SSO e criação da sessão
         session = boto3.Session(profile_name=selected_profile)
         sts_client = session.client('sts')
         sts_client.get_caller_identity()
-        lambda_client = session.client('lambda')
+        logs_client = session.client('logs') # Precisamos do cliente de Logs, não Lambda
 
         # Lê o CSV completo para processamento
         df = pd.read_csv(uploaded_file)
@@ -150,47 +182,49 @@ if run_enrichment:
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        tags_list = []
-        # Itera sobre o dataframe para buscar as tags de cada lambda
+        results_list = []
+        # Itera sobre o dataframe
         for index, row in df.iterrows():
             lambda_name = row[selected_column]
-            status_text.text(f"Buscando tags para: {lambda_name}")
+            status_text.text(f"Verificando logs para: {lambda_name}")
             
-            tags = get_lambda_tags(lambda_client, lambda_name)
-            tags_list.append(tags)
+            result = get_lambda_last_execution(logs_client, lambda_name)
+            results_list.append(result)
             
             progress_bar.progress((index + 1) / len(df))
             
-        # Adiciona a nova coluna com os resultados
-        df['AWS_Tags'] = tags_list
-        st.session_state.processed_df = df # Salva no estado da sessão
+        # Adiciona as novas colunas com os resultados
+        results_df = pd.DataFrame(results_list)
+        df = pd.concat([df, results_df], axis=1)
+        
+        st.session_state.processed_usage_df = df # Salva no estado da sessão
         
         status_text.empty()
         progress_bar.empty()
-        st.success("Processamento concluído com sucesso!")
+        st.success("Relatório gerado com sucesso!")
 
     except SSOTokenLoadError:
         success = handle_sso_login(selected_profile)
         if success:
-            st.info("Token renovado! Clique em 'Iniciar Processamento' novamente para continuar.")
+            st.info("Token renovado! Clique em 'Gerar Relatório' novamente para continuar.")
     except ClientError as e:
         st.error(f"Erro de permissão com o perfil '{selected_profile}': {e.response['Error']['Message']}")
     except Exception as e:
         st.error(f"Ocorreu um erro inesperado: {e}")
 
 # Exibe os resultados se eles existirem no estado da sessão
-if 'processed_df' in st.session_state:
+if 'processed_usage_df' in st.session_state:
     st.header("📊 Resultado")
-    st.dataframe(st.session_state.processed_df, use_container_width=True)
+    st.dataframe(st.session_state.processed_usage_df, use_container_width=True)
     
     # Converte o dataframe para CSV em memória para o download
-    csv_output = st.session_state.processed_df.to_csv(index=False).encode('utf-8')
+    csv_output = st.session_state.processed_usage_df.to_csv(index=False).encode('utf-8')
     
     st.download_button(
-        label="📥 Baixar CSV com Tags",
+        label="📥 Baixar Relatório (CSV)",
         data=csv_output,
-        file_name=f"lambdas_com_tags.csv",
+        file_name=f"lambda_usage_report.csv",
         mime='text/csv'
     )
-elif not run_enrichment:
-     st.info("Configure as opções na barra lateral e clique em 'Iniciar Processamento'.")
+elif not run_report:
+     st.info("Configure as opções na barra lateral e clique em 'Gerar Relatório'.")
